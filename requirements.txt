@@ -1,0 +1,6 @@
+mss
+pynput
+pillow
+PyQt6
+ollama
+python-dotenv
