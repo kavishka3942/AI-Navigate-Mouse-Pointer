@@ -1,232 +1,136 @@
 """
 gui/chatbot_widget.py
-~~~~~~~~~~~~~~~~~~~~~
-Split UI into two windows:
-
-- `InputBox`: static, anchored input that appears at the mouse and
-    immediately grabs focus. It hides on Enter or when losing focus and
-    emits `submitted` with the entered text.
-
-- `NotificationBubble`: a persistent floating bubble that follows the
-    custom AI pointer. It shows a loading indicator while the vision AI
-    runs and then displays a dismissable notification message.
-
-This file contains both classes and re-uses the `_LoadingIndicator`.
+Updated UI to match Figma designs using custom painted widgets.
 """
 from __future__ import annotations
-
 from enum import Enum
-
-from PyQt6.QtCore import QAbstractAnimation, QEasingCurve, QPoint, QRect, QPropertyAnimation, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QCursor, QPainter, QColor
+from PyQt6.QtCore import QPropertyAnimation, QPoint, QRect, QTimer, Qt, pyqtSignal
+from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QSizePolicy,
-    QStackedLayout,
     QVBoxLayout,
     QWidget,
-    QPushButton,
 )
-
-
+from gui.pill_styles import GlossyInputWidget, ProcessingWidget, GuidanceWidget
+from pynput.mouse import Listener as MouseListener # NEW: For global click detection
 class _ChatState(Enum):
     PROCESSING = "processing"
     NOTIFICATION = "notification"
-
-
-class _LoadingIndicator(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._phase = 0
-        self.setFixedSize(44, 14)
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._advance)
-        self._timer.start(140)
-
-    def _advance(self):
-        self._phase = (self._phase + 1) % 3
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-
-        dot_color = QColor(245, 246, 248)
-        centers = [11, 22, 33]
-        for index, center_x in enumerate(centers):
-            alpha = [80, 140, 220][(index - self._phase) % 3]
-            dot_color.setAlpha(alpha)
-            painter.setBrush(dot_color)
-            painter.drawEllipse(QPoint(center_x, self.height() // 2), 3, 3)
-
+    IDLE = "idle"
 
 class InputBox(QFrame):
-    """A static, anchored input box that appears at the mouse location and
-    immediately grabs focus. It hides on Enter or when it loses focus and
-    emits `submitted(str)` with the entered text.
-    """
-
+    """Frame 1: Static, anchored input pill with glossy border."""
     submitted = pyqtSignal(str)
 
     def __init__(self, parent=None, cursor_overlay=None):
         super().__init__(parent)
         self._cursor_overlay = cursor_overlay
-
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self._width = 420
-        self._height = 40
-
-        self.input = QLineEdit(self)
-        self.input.setPlaceholderText("Where should I guide you?")
-        self.input.returnPressed.connect(self._on_return)
-        self.input.setFixedHeight(28)
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.addWidget(self.input)
-
+        
+        # Use the new GlossyInputWidget
+        self._glossy_input = GlossyInputWidget(self)
+        self._glossy_input.return_pressed.connect(self._on_submit)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._glossy_input)
         self.hide()
 
     def show_at_cursor(self):
-        """Position at the current cursor logical position and show.
-        The widget is frozen at that screen spot until it hides.
-        """
         pos = self._cursor_anchor_point()
-        geom = QRect(pos.x(), pos.y() - self._height // 2, self._width, self._height)
-        # Ensure on-screen
+        # Center the 320x40 pill on the cursor
+        geom = QRect(pos.x() - 160, pos.y() - 20, 320, 40)
+        
         screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
         if screen:
             avail = screen.availableGeometry()
-            if geom.right() > avail.right():
-                geom.moveRight(avail.right() - 8)
-            if geom.left() < avail.left():
-                geom.moveLeft(avail.left() + 8)
-            if geom.top() < avail.top():
-                geom.moveTop(avail.top() + 8)
-
+            if geom.right() > avail.right(): geom.moveRight(avail.right() - 8)
+            if geom.left() < avail.left(): geom.moveLeft(avail.left() + 8)
+            
         self.setGeometry(geom)
         self.show()
         self.raise_()
-        QTimer.singleShot(0, self.input.setFocus)
+        # Set focus to the line edit after a short delay
+        QTimer.singleShot(10, self._glossy_input.set_focus)
 
-    def _on_return(self):
-        text = self.input.text().strip()
-        self.input.clear()
-        self.hide()
-        self.submitted.emit(text)
+    def _on_submit(self, text: str):
+        if text:  # Only submit if there's actual text
+            self.hide()
+            self.submitted.emit(text)
 
     def focusOutEvent(self, event):
-        # Hide immediately when user clicks away
         super().focusOutEvent(event)
         if self.isVisible():
             self.hide()
 
     def _cursor_anchor_point(self) -> QPoint:
-        if self._cursor_overlay is not None:
-            current_pos = getattr(self._cursor_overlay, "current_pos", None)
-            if current_pos is not None:
-                try:
-                    return QPoint(int(current_pos.x()), int(current_pos.y()))
-                except Exception:
-                    pass
+        if self._cursor_overlay and getattr(self._cursor_overlay, "current_pos", None):
+            return QPoint(int(self._cursor_overlay.current_pos.x()), int(self._cursor_overlay.current_pos.y()))
         return QCursor.pos()
 
-
 class ProcessingIndicator(QFrame):
-    """A compact, click-through floating loader that follows the AI pointer.
-    Used while the VisionWorker is processing.
-    """
-
+    """Frame 2: Compact processing pill that follows the cursor."""
     def __init__(self, parent=None, cursor_overlay=None):
         super().__init__(parent)
         self._cursor_overlay = cursor_overlay
-        self._anchor_gap = 8
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        # Click-through by default
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, True)
 
-        self._loading = _LoadingIndicator(self)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.addWidget(self._loading)
-
+        self._processing_widget = ProcessingWidget(self)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._processing_widget)
+        
+        # Timer to follow cursor
         self._follow_timer = QTimer(self)
-        self._follow_timer.setInterval(16)
         self._follow_timer.timeout.connect(self._follow_cursor)
-
         self.hide()
 
     def start(self):
-        self._loading.show()
-        self.adjustSize()
-        self._follow_timer.start()
+        """Show the processing indicator and start following cursor."""
+        self._follow_cursor()  # Position immediately
         self.show()
         self.raise_()
+        self._follow_timer.start(16)  # Update position every 16ms (~60fps)
 
     def stop(self):
+        """Hide the processing indicator and stop following."""
         self._follow_timer.stop()
         self.hide()
 
     def _follow_cursor(self):
-        if not self.isVisible():
+        if not self.isVisible(): 
             return
         anchor = self._cursor_anchor_point()
-        x = anchor.x() + self._anchor_gap
-        y = anchor.y() - self.height() // 2
-        screen = QApplication.screenAt(anchor) or QApplication.primaryScreen()
-        if screen:
-            avail = screen.availableGeometry()
-            if x + self.width() > avail.right() - 8:
-                x = anchor.x() - self.width() - self._anchor_gap
-            if y < avail.top() + 8:
-                y = avail.top() + 8
-            if y + self.height() > avail.bottom() - 8:
-                y = avail.bottom() - self.height() - 8
-
+        # Position to the right of the cursor
+        x = anchor.x() + 14
+        y = anchor.y() - 20
         self.move(x, y)
 
     def _cursor_anchor_point(self) -> QPoint:
-        if self._cursor_overlay is not None:
-            current_pos = getattr(self._cursor_overlay, "current_pos", None)
-            if current_pos is not None:
-                try:
-                    return QPoint(int(current_pos.x()), int(current_pos.y()))
-                except Exception:
-                    pass
+        if self._cursor_overlay and getattr(self._cursor_overlay, "current_pos", None):
+            return QPoint(int(self._cursor_overlay.current_pos.x()), int(self._cursor_overlay.current_pos.y()))
         return QCursor.pos()
 
-
 class NotificationBubble(QFrame):
-    """Floating bubble that follows the AI pointer. Shows a loading
-    indicator during processing and then displays a dismissable message.
-    """
-
+    """Frame 3: Guidance bubble that follows the cursor and dismisses on ANY click."""
     dismissed = pyqtSignal()
 
     def __init__(self, parent=None, cursor_overlay=None):
         super().__init__(parent)
         self._cursor_overlay = cursor_overlay
-        self._state = _ChatState.PROCESSING
-        self._anchor_gap = 14
-        self._follow_interval_ms = 16
-
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -234,117 +138,83 @@ class NotificationBubble(QFrame):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
+        self._guidance_widget = GuidanceWidget("Processing complete.", self)
+        self._guidance_widget.dismissed.connect(self._on_dismiss)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._guidance_widget)
+        
         self._follow_timer = QTimer(self)
-        self._follow_timer.setInterval(self._follow_interval_ms)
         self._follow_timer.timeout.connect(self._follow_cursor)
-
-        # Small, separate processing indicator that remains minimal and
-        # follows the pointer while the AI is thinking.
-        self._processing_indicator = ProcessingIndicator(cursor_overlay=self._cursor_overlay)
-
-        self._content = QWidget(self)
-        self._content.setStyleSheet(
-            """
-            QWidget { background-color: rgba(18,18,20,0.9); border-radius: 14px; }
-            QLabel { color: #F5F6F8; font-weight: 600; }
-            """
-        )
-
-        layout = QHBoxLayout(self._content)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(8)
-
-        self._loading = _LoadingIndicator(self._content)
-        self._label = QLabel(self._content)
-        self._label.hide()
-        self._dismiss_btn = QPushButton("Dismiss", self._content)
-        self._dismiss_btn.setFixedHeight(20)
-        self._dismiss_btn.clicked.connect(self._on_dismiss)
-        self._dismiss_btn.hide()
-
-        layout.addWidget(self._loading)
-        layout.addWidget(self._label)
-        layout.addWidget(self._dismiss_btn)
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(self._content)
-
+        
+        # NEW: Initialize the global mouse listener variable
+        self._mouse_listener = None
         self.hide()
 
     def start_processing(self):
-        self._label.hide()
-        self._dismiss_btn.hide()
-        # Hide the full bubble while showing the compact processing indicator
         self.hide()
-        self._processing_indicator.start()
 
     def show_notification(self, text: str):
-        # Stop and hide the minimal processing indicator if active
-        try:
-            self._processing_indicator.stop()
-        except Exception:
-            pass
-
-        self._loading.hide()
-        self._label.setText(text or "")
-        self._label.show()
-        self._dismiss_btn.show()
-        # Show and become interactive so the user can dismiss
-        self._set_click_through(False)
-        # Ensure layout and sizing are recalculated before positioning
-        self.adjustSize()
-        # Position immediately next to the pointer then start following
+        self._guidance_widget._text = text or "Processing complete."
+        self._guidance_widget.update()
         self._follow_cursor()
         self.show()
         self.raise_()
-        self._follow_timer.start()
+        self._follow_timer.start(16)
+        
+        # NEW: Start listening for global mouse clicks to auto-dismiss
+        self._start_global_click_listener()
 
     def _on_dismiss(self):
+        """Safely hides the bubble and stops all timers/listeners."""
+        if not self.isVisible():
+            return
+            
         self._follow_timer.stop()
+        self._stop_global_click_listener()
         self.hide()
         self.dismissed.emit()
 
-    def _set_click_through(self, enabled: bool):
-        # When enabled=True we want clicks to pass through: set TransparentForMouseEvents
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
-        # Also set WindowTransparentForInput flag
-        self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, enabled)
-        if self.isVisible():
-            # Re-show to ensure flags take effect
-            self.hide()
-            self.show()
+    # --- NEW: Global Click Detection Logic ---
+    def _start_global_click_listener(self):
+        """Starts a passive background thread to listen for any mouse click."""
+        if self._mouse_listener is None:
+            self._mouse_listener = MouseListener(on_click=self._on_global_click)
+            self._mouse_listener.start()
+
+    def _stop_global_click_listener(self):
+        """Stops the background listener."""
+        if self._mouse_listener is not None:
+            self._mouse_listener.stop()
+            self._mouse_listener = None
+
+    def _on_global_click(self, x, y, button, pressed):
+        """
+        Callback for pynput. Runs in a background thread.
+        If a mouse button is PRESSED anywhere on the screen, trigger dismiss.
+        """
+        if pressed:
+            # Use QTimer to safely marshal the call back to the main GUI thread
+            QTimer.singleShot(0, self._on_dismiss)
+            return False  # Return False to stop the listener after the first click
+        return True
+
+    # --- End Global Click Detection Logic ---
 
     def _follow_cursor(self):
-        if not self.isVisible():
+        if not self.isVisible(): 
             return
         anchor = self._cursor_anchor_point()
-        # place bubble to the right of cursor
-        x = anchor.x() + self._anchor_gap
-        y = anchor.y() - self.height() // 2
-        screen = QApplication.screenAt(anchor) or QApplication.primaryScreen()
-        if screen:
-            avail = screen.availableGeometry()
-            if x + self.width() > avail.right() - 8:
-                x = anchor.x() - self.width() - self._anchor_gap
-            if y < avail.top() + 8:
-                y = avail.top() + 8
-            if y + self.height() > avail.bottom() - 8:
-                y = avail.bottom() - self.height() - 8
-
+        x = anchor.x() + 14
+        y = anchor.y() - 25
         self.move(x, y)
 
     def _cursor_anchor_point(self) -> QPoint:
-        if self._cursor_overlay is not None:
-            current_pos = getattr(self._cursor_overlay, "current_pos", None)
-            if current_pos is not None:
-                try:
-                    return QPoint(int(current_pos.x()), int(current_pos.y()))
-                except Exception:
-                    pass
+        if self._cursor_overlay and getattr(self._cursor_overlay, "current_pos", None):
+            return QPoint(int(self._cursor_overlay.current_pos.x()), int(self._cursor_overlay.current_pos.y()))
         return QCursor.pos()
 
-
-# Backwards-compat alias for importing
+# Backwards-compat alias
 ChatInput = InputBox
 Notification = NotificationBubble
