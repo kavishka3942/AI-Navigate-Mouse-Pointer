@@ -32,3 +32,8 @@ FPS                 = 60               # Timer tick rate
 LERP_FACTOR         = 0.15             # Smooth-follow speed (% of gap per frame)
 AI_LOCK_DURATION_MS = 10_000           # How long the cursor parks on the AI target
 CURSOR_SCALE        = 0.7              # Visual size of the overlay cursor shape
+
+#---------------------------------------------------------------------------
+# STATE DIAGRAM
+#---------------------------------------------------------------------------
+JSON_FILEPATH = os.path.join(os.getcwd(), "database", "reva.json")
