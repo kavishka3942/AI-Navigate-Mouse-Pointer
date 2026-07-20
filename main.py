@@ -1,16 +1,5 @@
 """
 main.py – Application Entry Point
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Initialises the QApplication, creates the overlay window, and starts the
-Qt event loop.  All logic lives in the sub-packages below:
-
-    config/   – constants & environment settings
-    core/     – OS utilities (screen capture)
-    agents/   – VLM vision worker (and future LangGraph pipeline)
-    gui/      – Qt widgets (overlay cursor, chatbot stub)
-
-Run:
-    python main.py
 """
 import sys
 import signal
@@ -19,7 +8,7 @@ from PyQt6.QtWidgets import QApplication
 
 from config.settings import TARGET_ELEMENT
 from agents.vision_grounding import VisionWorker
-from gui.chatbot_widget import ChatInput, Notification
+from gui.chatbot_widget import ChatInput, Notification, ProcessingIndicator
 from gui.overlay_cursor import AICursorOverlay
 
 
@@ -43,12 +32,13 @@ def main() -> None:
 
     input_box = ChatInput(cursor_overlay=overlay)
     notification = Notification(cursor_overlay=overlay)
+    
+    # NEW: Create a separate ProcessingIndicator instance
+    processing_indicator = ProcessingIndicator(cursor_overlay=overlay)
 
     worker_state = {"worker": None}
 
     def toggle_input_box():
-        # Shortcut shows the static input anchored to the cursor. If already
-        # visible, hide it.
         if input_box.isVisible():
             input_box.hide()
             return
@@ -69,18 +59,23 @@ def main() -> None:
         dpr = primary_screen.devicePixelRatio()
         phys_width = int(screen_rect.width() * dpr)
         phys_height = int(screen_rect.height() * dpr)
-        # CHANGED: We pass the raw user_message (target_text) to the worker
         user_input = target_text.strip()
 
-        # Activate the floating notification bubble and show processing
-        notification.start_processing()
+        # NEW: Show processing indicator instead of notification
+        notification.start_processing()  # Hides notification
+        processing_indicator.start()     # Shows processing pill
 
         worker = VisionWorker(phys_width, phys_height, user_input)
         worker_state["worker"] = worker
 
         worker.target_found.connect(overlay.set_new_target)
-        # When the vision worker returns its label, show it in the bubble
-        worker.result_ready.connect(lambda _x, _y, label: notification.show_notification(label or "No label returned"))
+        
+        # When workflow completes, stop processing and show notification
+        def on_workflow_complete(x, y, label):
+            processing_indicator.stop()  # Stop processing indicator
+            notification.show_notification(label or "No label returned")
+        
+        worker.result_ready.connect(on_workflow_complete)
 
         def clear_worker():
             worker_state["worker"] = None
@@ -90,7 +85,6 @@ def main() -> None:
 
     overlay.chat_hotkey_pressed.connect(toggle_input_box)
     input_box.submitted.connect(launch_vision_search)
-    # Allow user to dismiss the floating notification
     notification.dismissed.connect(lambda: print("[+] Notification dismissed"))
 
     sys.exit(app.exec())
