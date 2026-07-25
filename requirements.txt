@@ -4,3 +4,8 @@ pillow
 PyQt6
 ollama
 python-dotenv
+networkx
+lancedb
+pyarrow
+sentence_transformers
+matplotlib
