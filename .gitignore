@@ -84,3 +84,18 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+Commit.md
+
+# Ignore the local vector database
+database/
+
+# Testing & Linting
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+cursor.code-workspace
